@@ -34,6 +34,7 @@ def sha256(string: str):
     k = [bitarray(f"{i:032b}") for i in k]
 
     w = [binary[i - 32: i] for i in range(32, 513, 32)] + [bitarray("0" * 32)] * 48
+    print(len(w))
     for i in range(16, 64):
         s0 = rotateRight(w[i - 15], 7) ^ rotateRight(w[i - 15], 18) ^ (w[i - 15] >> 3)
         s1 = rotateRight(w[i - 2], 17) ^ rotateRight(w[i - 2], 19)  ^ (w[i - 2] >> 10)

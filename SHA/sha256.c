@@ -1,14 +1,23 @@
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
+#include <math.h>
+#include <sys/types.h>
+#include <assert.h>
+
 
 unsigned int rotateRight(unsigned int tmp, int num) {
 	return tmp >> num | tmp << 32 - num;
 }
 
-int init(unsigned int *arr) {
+int blocks(unsigned long long int len) {
+	return (int)ceil((float)(len * 8. + 65) / 512.);
+}
+
+static const u_int32_t initConst(u_int32_t* arr) {
 	arr[0] = 0x6a09e667UL;
 	arr[1] = 0xbb67ae85UL;
 	arr[2] = 0x3c6ef372UL;
@@ -17,10 +26,9 @@ int init(unsigned int *arr) {
 	arr[5] = 0x9b05688cUL;
 	arr[6] = 0x1f83d9abUL;
 	arr[7] = 0x5be0cd19UL;
-	return 1;
 }
 
-static const unsigned int K256[64] = {
+static const u_int32_t K256[64] = {
     0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
     0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
     0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL,
@@ -39,43 +47,29 @@ static const unsigned int K256[64] = {
     0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
 };
 
-unsigned int* sha256(char* inputString) {
-	unsigned int *hash = (unsigned int*)malloc(512);
-	unsigned char *input = (unsigned char*)hash;
+unsigned int* hash256(unsigned int* hash, unsigned int* h, unsigned int* t) {
 	unsigned int s0 = 0, s1 = 0;
 	unsigned int maj = 0, ch = 0;
 	unsigned int tmp1 = 0, tmp2 = 0;
-	unsigned int h[8] = {0};
-	unsigned int *t = (unsigned int*)malloc(32);
-	int len = strlen(inputString);
+	u_int32_t w[64];
 
-	for(int i = 0; i < len; i ++)
-		input[i] |= inputString[i];
-	input[len] = 1 << 7;
-	for(int i = 0; len * 8 >> 8; i ++, len >>= 8)
-		input[63 - i] = 255 & len << 3;
-	input[63] = len << 3 & 255;
-
-	for(int i = 0; i < 64; i ++)
-		hash[i] = htonl(hash[i]);
-
-	init(h);
-	init(t);
+	for(int i = 0; i < 16; i ++)
+		w[i] = hash[i];
 
 	for(int i = 16; i < 64; i ++) {
-		s0 = rotateRight(hash[i - 15], 7) ^ rotateRight(hash[i - 15], 18) ^ hash[i - 15] >> 3;
-		s1 = rotateRight(hash[i - 2], 17) ^ rotateRight(hash[i - 2], 19)  ^ hash[i - 2] >> 10;
-		hash[i] = hash[i - 16] + s0 + hash[i - 7] + s1;
+		s0 = rotateRight(w[i - 15], 7) ^ rotateRight(w[i - 15], 18) ^ w[i - 15] >> 3;
+		s1 = rotateRight(w[i - 2], 17) ^ rotateRight(w[i - 2], 19)  ^ w[i - 2] >> 10;
+		w[i] = w[i - 16] + s0 + w[i - 7] + s1;
 	}
 
-	for(int i = 0; i < 64; i++) {
+	for(int i = 0; i < 64; i ++) {
 		s0 = rotateRight(t[0], 2) ^ rotateRight(t[0], 13) ^ rotateRight(t[0], 22);
 		maj = (t[0] & t[1]) ^ (t[0] & t[2]) ^ (t[1] & t[2]);
 		tmp2 = s0 + maj;
 
 		s1 = rotateRight(t[4], 6) ^ rotateRight(t[4], 11) ^ rotateRight(t[4], 25);
 		ch = (t[4] & t[5]) ^ (~t[4] & t[6]);
-		tmp1 = t[7] + s1 + ch + K256[i] + hash[i];
+		tmp1 = t[7] + s1 + ch + K256[i] + w[i];
 
 		t[7] = t[6];
 		t[6] = t[5];
@@ -87,16 +81,65 @@ unsigned int* sha256(char* inputString) {
 		t[0] = tmp1 + tmp2;
 	}
 
+	for(int k = 0; k < 8; k ++) {
+		h[k] += t[k];
+		t[k] = h[k];
+	}
+}
+
+void padding(u_char* inputString, u_int32_t* hash) {
+	u_char *input = (u_char*)hash;
+	int len = strlen(inputString);
+	int block = blocks(len);
+
+	for(int i = 0; i < len; i ++)
+		input[i] = inputString[i];
+	input[len] = 1 << 7;
+
+	input[block * 64 - 1] = len << 3;
+	input[block * 64 - 2] = len >> 5;
+	input[block * 64 - 3] = len >> 13;
+	input[block * 64 - 4] = len >> 21;
+
+	for(int i = 0; i < 64 * block; i ++)
+		hash[i] = htonl(hash[i]);
+}
+
+char* sha256(char* inputString) {
+	int block = blocks(strlen(inputString));
+
+	u_int32_t t[8] = {0};
+	u_int32_t h[8] = {0};
+	u_int32_t* hash = (u_int32_t*)calloc(16 * block, 4);
+	u_char* ret = (u_char*)calloc(256, 1);
+
+	padding(inputString, hash);
+	initConst(t);
+	initConst(h);
+
+	for(int i = 0; i < block; i ++)
+		hash256(hash + 16 * i, h, t);
+
 	for(int i = 0; i < 8; i ++)
-		t[i] += h[i];
-	return t;
+		sprintf(ret + strlen(ret), "%08X", h[i]);
+	
+	return ret;
 }
 
 int main() {
-	char *inputString = "hello world";
-	unsigned int *tmp = sha256(inputString);
-	for(int i = 0; i < 8; i ++)
-		printf("%08X", tmp[i]);
-	printf("\n");
-	free(tmp);
+	char *input = 0;
+	char c;
+	long length = 0;
+
+	while((c = getchar()) != EOF) {
+	  char *t = realloc(input, length ++);
+	  input = t;
+	  input[length] = c;
+	}
+
+	char *tmp = sha256(input);
+	if(input[length] == '\n')
+		printf("256sum = 0x%s\n", tmp);
+	else
+		printf("\n256sum = 0x%s\n", tmp);
 }
